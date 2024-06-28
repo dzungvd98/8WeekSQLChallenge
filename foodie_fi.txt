@@ -64,3 +64,139 @@ SELECT COUNT(s.customer_id) AS number_churn,
 FROM subscriptions s
 JOIN plans p ON s.plan_id = p.plan_id
 WHERE p.plan_id = 4
+
+
+5. How many customers have churned straight after their initial free trial - what percentage is this rounded to the nearest whole number?
+WITH time_trial AS
+	(SELECT 
+		s.customer_id, 
+		s.plan_id, 
+		p.plan_name, 
+		s.start_date, 
+		DATEADD(day, 7, s.start_date) end_trial
+	FROM subscriptions s
+	JOIN plans p ON s.plan_id = p.plan_id
+	WHERE p.plan_name = 'trial')
+
+SELECT  COUNT(s.customer_id) AS number_churn_trial,
+		ROUND(COUNT(s.customer_id)*100.0/
+			 (SELECT COUNT(customer_id) 
+			 FROM time_trial),2) churn_percentage
+FROM subscriptions s
+JOIN time_trial t
+	ON s.customer_id = t.customer_id
+	AND s.start_date = t.end_trial
+WHERE s.plan_id = 4;
+
+6. What is the number and percentage of customer plans after their initial free trial?
+WITH next_customer_plan AS (
+	SELECT 
+		s.customer_id, 
+		s.plan_id,
+		LEAD(s.plan_id) OVER(
+			PARTITION BY s.customer_id 
+			ORDER BY s.customer_id) as next_plan
+		FROM subscriptions s)
+
+SELECT 
+	next_plan as plan_convert, 
+	COUNT(next_plan) as num_peole_convert, 
+	ROUND(COUNT(next_plan)*100.0/
+		(SELECT COUNT(DISTINCT customer_id)
+		 FROM subscriptions),2) as percent_convert 
+FROM next_customer_plan 
+WHERE plan_id = 0
+GROUP BY next_plan
+
+
+7. What is the customer count and percentage breakdown of all 5 plan_name values at 2020-12-31?
+WITH customer_rank_subscriber AS (
+	SELECT customer_id,
+		plan_id,
+		start_date,
+		ROW_NUMBER() OVER (
+			PARTITION BY customer_id 
+			ORDER BY start_date DESC) as rank_subscriber
+	FROM subscriptions
+	WHERE start_date <= '2020-12-31')
+SELECT 
+	plan_id, 
+	COUNT(customer_id) as number_customer, 	
+	ROUND(COUNT(customer_id)*100.0/
+		(SELECT COUNT(DISTINCT customer_id)
+		FROM subscriptions),2) as percentage
+FROM customer_rank_subscriber
+WHERE rank_subscriber = 1
+GROUP BY plan_id
+ORDER BY plan_id;
+
+8. How many customers have upgraded to an annual plan in 2020?
+SELECT 
+	COUNT(DISTINCT customer_id) AS number_customer
+FROM subscriptions 
+WHERE YEAR(start_date) = 2020 
+	  AND plan_id = 3;
+
+9. How many days on average does it take for a customer to upgrade to an annual plan from the day they join Foodie-Fi?
+WITH a AS (
+	SELECT customer_id, plan_id, start_date
+	FROM subscriptions 
+	WHERE plan_id = 3)
+SELECT	
+	AVG(DATEDIFF(DAY, s.start_date, a.start_date)) avg_time_to_anual
+FROM subscriptions s
+JOIN a ON s.customer_id = a.customer_id
+WHERE s.plan_id = 0;
+
+10. Can you further breakdown this average value into 30 day periods (i.e. 0-30 days, 31-60 days etc)
+
+WITH trial_list AS (
+	SELECT customer_id, plan_id, start_date as join_date
+	FROM subscriptions 
+	WHERE plan_id = 0
+), pro_list AS (
+	SELECT customer_id, plan_id, start_date as convert_date
+	FROM subscriptions 
+	WHERE plan_id = 3
+), fully_pro_list AS (
+	SELECT pl.customer_id, DATEDIFF(day, join_date, convert_date) as day_to_update
+	FROM trial_list tl
+	JOIN pro_list pl
+	ON tl.customer_id = pl.customer_id
+), day_diff AS( 
+	SELECT 
+		customer_id, 
+		day_to_update,
+		CASE
+			WHEN day_to_update < 0 THEN 'INVALID'
+			ELSE CONCAT(
+			CAST((day_to_update/30)*30 AS VARCHAR(10)),
+			' - ',
+			CAST((day_to_update/30 + 1)*30 AS VARCHAR(10)),
+			' days')
+			END as day_range
+			
+			
+	FROM fully_pro_list)
+
+SELECT day_range, COUNT(customer_id) as number_people
+FROM day_diff
+GROUP BY day_range
+ORDER BY MIN(day_to_update)
+
+11. How many customers downgraded from a pro monthly to a basic monthly plan in 2020?
+WITH pro_month_list AS (
+	SELECT 
+		customer_id, 
+		plan_id, 
+		start_date
+	FROM subscriptions s
+	WHERE plan_id = 2)
+SELECT COUNT(pol.customer_id) AS people_downgraded
+FROM pro_month_list pol
+JOIN subscriptions s 
+	ON pol.customer_id = s.customer_id
+WHERE 
+	s.plan_id = 1 AND 
+	s.start_date > pol.start_date AND 
+	YEAR(s.start_date) = 2020;
