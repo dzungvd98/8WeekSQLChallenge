@@ -1,0 +1,250 @@
+A. Data Cleansing Steps
+DROP TABLE IF EXISTS clean_weekly_sales;
+CREATE TEMP TABLE clean_weekly_sales AS (
+	SELECT
+	TO_DATE(week_date, 'DD/MM/YY') AS week_date,
+	DATE_PART('week', TO_DATE(week_date, 'DD/MM/YY')) AS week_number,
+	DATE_PART('month', TO_DATE(week_date, 'DD/MM/YY')) as month_number,
+	DATE_PART('year', TO_DATE(week_date, 'DD/MM/YY')) as calendar_year,
+	region,
+	platform,
+	segment,
+	CASE 
+		WHEN RIGHT(segment,1) = '1' THEN 'Young Adults'
+		WHEN RIGHT(segment,1) = '2' THEN 'Middle Aged'
+		WHEN RIGHT(segment,1) IN ('3','4') THEN 'Retirees'
+		ELSE 'unknown' END AS age_band,
+	CASE 
+		WHEN LEFT(segment,1) = 'C' THEN 'Couples'
+		WHEN LEFT(segment,1) = 'F' THEN 'Families'
+		ELSE 'unknown' END AS demographic,
+	transactions,
+	ROUND((sales::NUMERIC/transactions),2) AS avg_transaction,
+	sales
+	FROM data_mart.weekly_sales
+)
+
+B. Data Exploration
+1. What day of the week is used for each week_date value?
+SELECT DISTINCT (TO_CHAR(week_date,'day')) AS week_day
+FROM clean_weekly_sales
+
+2. What range of week numbers are missing from the dataset?
+WITH week_number_cte AS (
+	SELECT GENERATE_SERIES(1,52) AS week_number
+) 
+	
+SELECT DISTINCT w.week_number
+FROM week_number_cte w
+LEFT JOIN clean_weekly_sales AS cw
+	ON w.week_number = cw.week_number
+WHERE cw.week_number IS NULL
+
+3.How many total transactions were there for each year in the dataset?
+SELECT 
+	calendar_year, 
+	SUM(transactions)
+FROM clean_weekly_sales
+GROUP BY calendar_year
+ORDER BY calendar_year
+
+4.What is the total sales for each region for each month?
+SELECT 
+	region, 
+	month_number, 
+	SUM(sales)
+FROM clean_weekly_sales
+GROUP BY 
+	region, 
+	month_number
+ORDER BY 
+	month_number, 
+	region;
+
+5. What is the total count of transactions for each platform?
+SELECT 
+	platform,
+	COUNT(transactions) as count_of_transactions
+FROM clean_weekly_sales
+GROUP BY platform
+
+6. What is the percentage of sales for Retail vs Shopify for each month?
+WITH platform_sales_month AS(
+	SELECT 
+	platform,
+	calendar_year,
+	month_number,
+	SUM(sales) as total_sales,  
+	SUM(SUM(sales)) OVER(PARTITION BY calendar_year, month_number) all_month_sales
+FROM clean_weekly_sales
+GROUP BY 
+	platform, 
+	month_number,
+	calendar_year
+)
+
+SELECT 
+	calendar_year,
+	month_number, 
+	platform, 
+	ROUND(total_sales*100.0/all_month_sales,2) as percentage_of_sales
+FROM platform_sales_month
+ORDER BY calendar_year, month_number
+
+
+WITH platform_sales_month AS(
+	SELECT 
+	platform,
+	calendar_year,
+	month_number,
+	SUM(sales) as total_sales
+FROM clean_weekly_sales
+GROUP BY 
+	platform,
+	calendar_year,
+	month_number
+)
+
+SELECT 
+	calendar_year, 
+	month_number, 
+	ROUND(MAX(CASE WHEN platform = 'Retail' THEN total_sales END)*100.0 /SUM(total_sales),2) as retail_sales_percent ,
+	ROUND(MAX(CASE WHEN platform = 'Shopify' THEN total_sales END)*100.0 /SUM(total_sales),2) as shopify_sales_percent
+	
+FROM platform_sales_month
+GROUP BY 
+	calendar_year, 
+	month_number
+ORDER BY 
+	calendar_year, 
+	month_number;
+
+7. What is the percentage of sales by demographic for each year in the dataset?
+WITH demographic_sales AS(
+	SELECT 
+		calendar_year, 
+		demographic, 
+		SUM(sales) as total_sales
+	FROM clean_weekly_sales
+	GROUP BY 
+		calendar_year, 
+		demographic
+)
+
+SELECT 
+	calendar_year, 
+	ROUND(MAX(CASE WHEN demographic = 'Families' THEN total_sales END) *100.0/SUM(total_sales),2) as families_percent_sales,
+	ROUND(MAX(CASE WHEN demographic = 'Couples' THEN total_sales END) *100.0/SUM(total_sales),2) as couples_percent_sales,	
+	ROUND(MAX(CASE WHEN demographic = 'unknown' THEN total_sales END) *100.0/SUM(total_sales),2) as unknown_percent_sales	
+FROM demographic_sales 
+GROUP BY calendar_year
+ORDER BY calendar_year;
+
+8. Which age_band and demographic values contribute the most to Retail sales?
+SELECT 
+	age_band, 
+	demographic, 
+	SUM(sales) as total_sales,
+   	ROUND(SUM(sales)*100.0/SUM(SUM(sales)) OVER(),2) percentage_sales
+FROM clean_weekly_sales
+GROUP BY 
+	age_band, 
+	demographic
+ORDER BY 
+	age_band, 
+	demographic;
+
+9. Can we use the avg_transaction column to find the average transaction size for each year for Retail vs Shopify? If not - how would you calculate it instead?
+SELECT 
+	platform, 
+	calendar_year,
+	ROUND(AVG(avg_transaction)) as avg_avg_transaction,
+	ROUND(SUM(sales)/SUM(transactions)) as avg_transaction_divide 
+FROM clean_weekly_sales
+GROUP BY 
+	platform, 
+	calendar_year
+ORDER BY 
+	calendar_year, 
+	platform;
+
+
+C. Before & After Analysis
+1. What is the total sales for the 4 weeks before and after 2020-06-15? What is the growth or reduction rate in actual values and percentage of sales?
+WITH params AS (
+    SELECT DATE_PART('week', TO_DATE('2020-06-15', 'YYYY-MM-DD')) AS start_week
+),
+month_total_sales AS (
+	SELECT week_number, SUM(sales) as total_sales
+	FROM clean_weekly_sales
+	WHERE calendar_year = 2020
+	GROUP BY week_number
+),
+last_and_next_4week_sales AS (
+	SELECT
+		SUM( CASE WHEN week_number BETWEEN p.start_week AND (p.start_week + 3) THEN total_sales ELSE 0 END ) as next_4_week_sales, 
+		SUM( CASE WHEN week_number BETWEEN (p.start_week - 4) AND (p.start_week - 1) THEN total_sales ELSE 0 END ) as last_4_week_sales
+	
+		FROM month_total_sales, 
+			 params p
+)
+
+SELECT 
+	last_4_week_sales, 
+	next_4_week_sales,
+	ROUND ((next_4_week_sales - last_4_week_sales) *100.0/last_4_week_sales,2) percentage_change
+FROM last_and_next_4week_sales;
+
+2.What about the entire 12 weeks before and after?
+
+WITH params AS (
+	SELECT DATE_PART('week',TO_DATE('2020-06-15','YYYY/MM/DD')) as week_start, 12 as period_view , DATE_PART('year',DATE('2020-06-15')) as year_view 
+),
+year_view_sales AS(
+	SELECT cw.week_number, SUM(cw.sales) total_sales
+	FROM clean_weekly_sales cw,
+		 params p
+	WHERE cw.calendar_year = p.year_view
+	GROUP BY cw.week_number
+),
+total_sales_all_period AS (
+	SELECT 
+		SUM(CASE WHEN y.week_number BETWEEN (p.week_start - p.period_view) AND (p.week_start - 1) THEN total_sales ELSE 0 END) as last_period, 
+		SUM(CASE WHEN y.week_number BETWEEN p.week_start AND (p.week_start + p.period_view - 1) THEN total_sales ELSE 0 END) as next_period
+	FROM year_view_sales y, params p
+)
+
+SELECT last_period, next_period, ROUND((next_period-last_period)*100.0/last_period,2) as percentage_change
+FROM total_sales_all_period;
+
+3.
+WITH params AS( -- table to save param week_start is week_number start...
+	SELECT DATE_PART('week', 
+	DATE('2020-06-15')) as week_start, 
+	2 as year_compare, 12 as week_compare, 
+	DATE_PART('year', DATE('2020-06-15')) as year_view
+),
+week_total_sales AS ( -- table to get total_sales of all week at year compare
+	SELECT 
+		c.calendar_year, 
+		c.week_number, 
+		SUM(sales) as total_sales
+	FROM clean_weekly_sales c, params p 
+	WHERE c.calendar_year BETWEEN (c.calendar_year - p.year_compare) AND p.year_view
+	GROUP BY c.calendar_year, c.week_number
+),
+year_period_total_sales AS ( -- table to get total sales on period of each year
+	SELECT 
+		w.calendar_year,
+		SUM(CASE WHEN w.week_number BETWEEN p.week_start - p.week_compare AND p.week_start - 1 THEN total_sales END) as last_12_week,
+		SUM(CASE WHEN w.week_number BETWEEN p.week_start AND p.week_start + p.week_compare - 1 THEN total_sales END) as next_12_week
+	FROM week_total_sales w, params p
+	GROUP BY w.calendar_year
+)
+
+SELECT 
+	calendar_year, 
+	next_12_week - last_12_week as sales_variance, 
+	ROUND((next_12_week - last_12_week)*100.0/last_12_week,2) as percentage_change
+FROM year_period_total_sales
+ORDER BY calendar_year
