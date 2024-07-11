@@ -1,0 +1,119 @@
+The color table contains the following columns:
+	id stores the unique ID for each color.
+	name stores the name of the color.
+	extra_fee stores the extra charge (if any) added for clothing ordered in this color.
+	
+In the customer table, you'll find the following columns:
+
+	id stores customer IDs.
+	first_name stores the customer's first name.
+	last_name stores the customer's last name.
+	favorite_color_id stores the ID of the customer's favorite color (references the color table).
+
+The category table contains these columns:
+	id stores the unique ID for each category.
+	name stores the name of the category.
+	parent_id stores the ID of the main category for this category (if it's a subcategory). If this value is NULL, it denotes that this category is a main category. Note: Values are related to those in the id column in this table.
+
+The clothing table stores data in the following columns:
+	id stores the unique ID for each item.
+	name stores the name of that item.
+	size stores the size of that clothing: S, M, L, XL, 2XL, or 3XL.
+	price stores the item's price.
+	color_id stores the item's color (references the color table).
+	category_id stores the item's category (references the category table).
+
+The clothing_order table contains the following columns:
+	id stores the unique order ID.
+	customer_id stores the ID of the customer ordering the clothes (references the customer table).
+	clothing_id stores the ID of the item ordered (references the clothing table).
+	items stores how many of that clothing item the customer ordered.
+	order_date stores the date of the order.
+
+
+1. Create Tables
+
+CREATE TABLE colors (
+	id SERIAL PRIMARY KEY,
+	name VARCHAR(255) NOT NULL,
+	extra_fee DECIMAL(10,2)
+);
+
+CREATE TABLE customers (
+	id SERIAL PRIMARY KEY,
+	first_name VARCHAR(255) NOT NULL,
+	last_name VARCHAR(255) NOT NULL,
+	favorite_color_id INT REFERENCES colors(id)
+);
+
+CREATE TABLE categories(
+	id SERIAL PRIMARY KEY,
+	name VARCHAR(255) NOT NULL,
+	parent_id INT REFERENCES categories(id)
+);
+
+CREATE TABLE clothing(
+	id SERIAL PRIMARY KEY,
+	name VARCHAR(255) NOT NULL,
+	size VARCHAR(10) CHECK (size IN ('S', 'M', 'L', 'XL', '2XL', '3XL')) NOT NULL,
+	price DECIMAL(10,2) NOT NULL,
+	category_id INT REFERENCES categories(id)	
+);
+
+CREATE TABLE clothing_order (
+	id SERIAL PRIMARY KEY,
+	customer_id INT REFERENCES customers(id),
+	clothing_id INT REFERENCES clothing(id),
+	items INT NOT NULL,
+	order_date TIMESTAMP 
+)
+
+2. List All Clothing Items
+Display the name of clothing items (name the column clothes), their color (name the column color), and the last name and first name of the customer(s) who bought this apparel in 
+their favorite color. Sort rows according to color, in ascending order.
+ 
+SELECT cl.name, co.name, c.first_name, c.last_name
+FROM customers c
+JOIN clothing cl ON c.favorite_color_id = cl.color_id
+JOIN colors co ON cl.color_id = co.id
+ORDER BY co.name
+
+
+3. Get All Non-Buying Customers
+Select the last name and first name of customers and the name of their favorite color for customers with no purchases.
+
+WITH color_buy AS (
+	SELECT customer_id, c.color_id
+	FROM clothing_order clo
+	JOIN clothing c ON clo.clothing_id = c.id
+)
+
+SELECT c.first_name, c.last_name, co.name
+FROM customers c 
+LEFT JOIN color_buy cb ON c.id = cb.customer_id AND c.favorite_color_id = cb.color_id
+JOIN colors co ON c.favorite_color_id = co.id
+WHERE cb.color_id IS NULL;
+
+4. Select All Main Categories and Their Subcategories
+Select the name of the main categories (which have a NULL in the parent_id column) and the name of their direct subcategory (if one exists). Name the first column category 
+and the second column subcategory.
+SELECT
+    main.name AS category,
+    sub.name AS subcategory
+FROM
+    categories main
+LEFT JOIN
+    categories sub ON main.id = sub.parent_id
+WHERE
+    main.parent_id IS NULL;
+
+WITH parent_categories AS (
+	SELECT id, name
+	FROM categories 
+	WHERE parent_id IS NULL
+)
+
+SELECT pc.name, c.name
+FROM categories c
+JOIN parent_categories pc ON c.parent_id = pc.id;
+
